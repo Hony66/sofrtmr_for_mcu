@@ -2,25 +2,29 @@
   ******************************************************************************
   * @file    SoftTmr.c
   * @author  Hony
-  * @version V1.1
+  * @version V1.0
   * @date    2016-12-12
   * @brief   软件定时器
   @verbatim
-         最多可以使用TMR_MAX_LEN个定时器
+   2016-12-12 V1.0
+   创建
+   2019-01-09 V1.1
+   修改定时器实现，采用升序单向链表，每次只用比对第一个是否到期即可；
+   修改定时器中断回调函数，增加主循环运行函数，将大部分处理放在主循环中；
   @endverbatim
   ******************************************************************************
   * @attention
   * 
   ******************************************************************************  
-  */
-  
+  */  
 #include "softtmr.h"
 
 
 static Tmr_TCB Tmr_Buff[TMR_MAX_LEN] = {0};
-static Tmr_TCB *pTmrUsed;
-static Tmr_TCB *pTmrIdle;
-
+static Tmr_TCB *pTmrUsed;//已使用的定时器内存池的表头
+static Tmr_TCB *pTmrIdle;//未使用的定时器内存池的表头
+static volatile unsigned int tmr_tick = 0;
+static volatile unsigned char tmr_cnt = 0;
 
 /**
   * @brief  软件定时的初始化
@@ -37,6 +41,8 @@ void Tmr_Init(void)
         Tmr_Buff[i].pNext = &Tmr_Buff[i+1];
     } 
     Tmr_Buff[i].pNext = NULL;
+	tmr_tick = 0;
+    tmr_cnt = 0;
 }
 
 
@@ -88,21 +94,14 @@ Tmr_Result Tmr_Del(unsigned char Id)
             if(pPrev != NULL)
             {
                 pPrev->pNext = pList->pNext;
-                if(pList->pNext != NULL)
-                {
-                    pList->pNext->Info.Tick += pList->Info.Tick;
-                }
             }
             else
             {
-                if(pTmrUsed->pNext != NULL)
-                {
-                    pTmrUsed->pNext->Info.Tick += pTmrUsed->Info.Tick;
-                }
                 pTmrUsed = pTmrUsed->pNext;
             }
             Tmr_Free(pList);
             res = TMR_OK;
+            tmr_cnt--;
             break;
         }  
         pPrev = pList;
@@ -111,26 +110,44 @@ Tmr_Result Tmr_Del(unsigned char Id)
     return res;
 }
 
+/**
+  * @brief  查找所有定时器中是否含有指定定时器
+  * @param  Id 定时器ID
+  * @retval Tmr_Result
+  */
+Tmr_Result Tmr_Find(unsigned char Id)
+{
+    Tmr_Result res = TMR_ERR;
+    Tmr_TCB *pList = pTmrUsed;
+    while(pList != NULL)//找到相同的删除
+    {
+        if(pList->Info.Id == Id)
+        {
+            res = TMR_OK;
+            break;
+        }  
+        pList = pList->pNext;
+    }
+    return res;
+}
 
 /**
   * @brief  创建定时器，如果ID存在，则相当于重装定时器
   * @param  Id 定时器ID
   * @param  Period 定时周期 /100ms
-  * @param  Mode  定时模式，MULTI_SHOOT 重复运行，ONE_SHOOT 运行一次
+  * @param  Mode  定时模式，TMR_MODE_PERIODIC 重复运行，TMR_MODE_ONE_SHOT 运行一次
   * @param  Callback 定时到期回调函数
   * @retval Tmr_Result
   */
-Tmr_Result Tmr_Add(unsigned char Id, unsigned short int Period, Tmr_Run_Mode Mode, _cbTmOt Callback)
+Tmr_Result Tmr_Add(unsigned char Id, unsigned int Period, Tmr_Run_Mode Mode, _cbTmOt Callback)
 {
-    unsigned short int tTick = Period;
     Tmr_Result res;
-    Tmr_TCB *pPrev;
+    Tmr_TCB *pRev = NULL;
     Tmr_TCB *pNew;
     Tmr_TCB *pList;
     Tmr_Del(Id);//删除相同的ID,确保链表中没有相同的ID
     pList = pTmrUsed;
     pNew = Tmr_Malloc();//申请空间
-    pPrev = NULL;
     if(pNew != NULL)
     {
         pNew->pNext = NULL;
@@ -138,44 +155,40 @@ Tmr_Result Tmr_Add(unsigned char Id, unsigned short int Period, Tmr_Run_Mode Mod
         pNew->Info.Id = Id;
         pNew->Info.Period = Period;
         pNew->Info.RunMode = Mode;
+        pNew->Info.Tick = tmr_tick + (pNew->Info.Period * (TMR_TICK_FREQ/TMR_FREQ));
         if(pList != NULL)
         {
             while(pList != NULL)
             {
-                if(tTick <= pList->Info.Tick)
+                if(pNew->Info.Tick  <= pList->Info.Tick)
                 {
-                    if(pPrev != NULL)
-                    {
-                        pPrev->pNext = pNew;
-                    }
-                    pNew->pNext = pList;
-                    pList->Info.Tick -= tTick;
-                    pNew->Info.Tick = tTick;
-                    if(pList == pTmrUsed)
-                    {
+                    if(pRev == NULL)//第一个位置
+                    {//插入表头
+                        pNew->pNext = pTmrUsed;
                         pTmrUsed = pNew;
                     }
+                    else//中间位置
+                    {//插入表中
+                        pNew->pNext = pList;
+                        pRev->pNext = pNew;
+                    }
                     break;
                 }
-                tTick -= pList->Info.Tick;
-                if(pList->pNext == NULL)
-                {
+                else if(pList->pNext == NULL)//到最后了
+                {//插入表尾部
                     pList->pNext = pNew;
-                    pNew->pNext = NULL;
-                    pNew->Info.Tick = tTick;
                     break;
                 }
-                pPrev = pList;
-                pList = pList->pNext;  
-                
+                pRev = pList;
+                pList = pList->pNext;     
             }     
         }
         else
         {
             pTmrUsed = pNew;
-            pTmrUsed->Info.Tick = tTick;
         }
         res = TMR_OK;
+        tmr_cnt++;
     }
     else
     {
@@ -205,48 +218,57 @@ Tmr_Result Tmr_Reset(unsigned char Id)
     }
     if(res == TMR_OK)
     {
-        res = Tmr_Add(pTemp->Info.Id, pTemp->Info.Period, pTemp->Info.RunMode, pTemp->Info.Callback);
+        Tmr_Add(pTemp->Info.Id, pTemp->Info.Period, pTemp->Info.RunMode, pTemp->Info.Callback);
     }
     return res;
 }
 
 
-
 /**
-  * @brief  定时器中断回调函数，需要被周期性调用 当前10hz
+  * @brief  定时器中断回调函数，需要被周期性调用
   * @param  无
   * @retval 无
   */
 void Tmr_IRQCallback(void)
 {
-    if(pTmrUsed != NULL)
-    {
-        while(pTmrUsed->Info.Tick == 0)
-        {
-            if(pTmrUsed->Info.Callback != NULL)
-            {
-                pTmrUsed->Info.Callback();
-            }
-            if(pTmrUsed->Info.RunMode == MULTI_SHOOT)
-            {
-                Tmr_Reset(pTmrUsed->Info.Id);
-            }
-            else
-            {
-                Tmr_Del(pTmrUsed->Info.Id);
-            }
-        }
-        if(pTmrUsed != NULL);
-        {
-            pTmrUsed->Info.Tick--;
-        }
-    }
+	tmr_tick++;
 }
 
 
-
-
-
+/**
+  * @brief  定时器运行
+  * @param  无
+  * @retval 无
+  */
+void Tmr_Run(void)
+{
+    Tmr_TCB *pTemp = NULL;
+    _cbTmOt _cb = NULL;
+    while(pTmrUsed != NULL)
+    {
+        pTemp = pTmrUsed;
+        if(tmr_tick >= pTemp->Info.Tick)
+		{
+            _cb = pTemp->Info.Callback;
+            if(pTemp->Info.RunMode == TMR_MODE_PERIODIC)
+            {
+                Tmr_Reset(pTemp->Info.Id);
+            }
+            else
+            {
+                Tmr_Del(pTemp->Info.Id);
+            }
+            if(_cb != NULL)
+            {
+                _cb();
+            }
+        }
+        else
+        {
+            break;
+        }
+    }
+}
 
 
 

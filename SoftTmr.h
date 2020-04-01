@@ -1,8 +1,14 @@
 #ifndef __SOFTTMR_H
 #define __SOFTTMR_H
 
-#define TMR_FREQ        10U//HZ, 这个参数需要根据调用Tmr_IRQCallback的频率填写
-#define TMR_MAX_LEN     10U
+//软件定时器tick运行频率
+#define TMR_TICK_FREQ       1000U//HZ  
+//运行单位(例如10HZ相当于100ms), 如果赋给定时器的 Period = 10, 那么实际的定时时间应该是Period * (TMR_TICK_FREQ/TMR_FREQ)  ms
+#define TMR_FREQ            10U//HZ 相当于100ms
+
+
+
+#define TMR_MAX_LEN         16U
 
 #ifndef NULL
     #define NULL 0u
@@ -16,18 +22,18 @@ typedef enum {
 
 
 typedef enum {
-    ONE_SHOOT = 0,
-    MULTI_SHOOT,
+    TMR_MODE_ONE_SHOT = 0,
+    TMR_MODE_PERIODIC,
 }Tmr_Run_Mode;
 
 
 typedef void(*_cbTmOt)(void);
 
 typedef struct{
-    volatile Tmr_Run_Mode   RunMode;       // Timer运行模式，RUN_ALWAYS，RUN_ONCE
+    volatile Tmr_Run_Mode    RunMode;       // Timer运行模式
     volatile unsigned char   Id;            // Timer ID号
-    volatile unsigned short int  Period;        // 定时时间
-    volatile unsigned short int  Tick;          // 计数器
+    volatile unsigned int    Period;        // 定时时间
+    volatile unsigned int    Tick;          // 计数器
     volatile _cbTmOt Callback;
 }Tmr_Info;
 
@@ -41,10 +47,12 @@ typedef struct TMR_TCB_STRUCT {
 
 
 void Tmr_Init(void);
-Tmr_Result Tmr_Add(unsigned char Id, unsigned short int Period, Tmr_Run_Mode Mode, _cbTmOt Callback);
+Tmr_Result Tmr_Add(unsigned char Id, unsigned int Period, Tmr_Run_Mode Mode, _cbTmOt Callback);
 Tmr_Result Tmr_Del(unsigned char Id);
 Tmr_Result Tmr_Reset(unsigned char Id);
 void Tmr_IRQCallback(void);
+Tmr_Result Tmr_Find(unsigned char Id);
+void Tmr_Run(void);
 
 
 
